@@ -1,0 +1,15 @@
+[tool.poetry]
+name = "pybass3"
+version = "0.1.0"
+description = "A managed ctypes wrapper around the BASS audio library"
+authors = ["devdave <devdave@ominian.net>"]
+license = "MIT"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "<=3.10"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
