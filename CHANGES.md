@@ -29,3 +29,22 @@ supporting logic goes into wiring this up.
   
 * current_song property/variable is dead & gone, the correct property is now `current` which handles memory/handle cleanup
 and keeps things kosher.
+  
+0.1.0
+-----
+
+* Add support for BASS_GetTags along with a default
+helper to fetch (artist, album, year, track, and genre)
+  
+* Various code cleanup
+
+* `add_song` has changed so that it takes a `Song` object and adds that to the playlist/queue while the original method
+has been renamed to `add_song_by_path`
+  
+* Refactored Signals to be consolidated into an adjacent "<ClassName>Signals" class to make it easier to see what signals
+a given class emits.
+  
+* Refactoring to get rid of camelCase convention in my code in favor of snake_case.
+
+* Refactoring Pys2_\* classes to be compatible with both PyQT5 and Pyside2 via the qtd.py module.
+  

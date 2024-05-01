@@ -8,6 +8,7 @@
 """
 import enum
 import pathlib
+import typing
 from pathlib import Path
 import random
 import logging
@@ -53,8 +54,8 @@ class Playlist:
 
 
 
-    def __init__(self, song_cls = Song):
-        self.songs = {}
+    def __init__(self, song_cls = Song, songs=None):
+        self.songs = songs or {}
         self.queue = []
         self.state = PlaylistState.stopped
         self.mode = PlaylistMode.sequential
@@ -74,8 +75,9 @@ class Playlist:
     def free(self):
         del self.current
         del self.fadein_song
-        self.songs = []
+        self.songs = {}
         self.queue = []
+        self.queue_position = 0
 
     def clear(self):
         self.free()
@@ -90,13 +92,41 @@ class Playlist:
         return self.songs[key]
 
     def get_song_by_id(self, song_id) -> Song:
+        log.debug("get_song_by_id %s", song_id)
         return self.songs.get(song_id, None)
 
-    def add_song(self, song_path: pathlib.Path, add2queue=True):
-        log.debug("Playlist.add_song called with %s", song_path)
+    def get_indexof_song_by_id(self, song_id):
+        """
+            Find out where in the songs list a specific song is located.   Only works reliably with
+            Python >= 3.7 where dict is naturally ordered.
+
+            Drastically slower but works for now.
+
+        :param song_id:
+        :return:
+        """
+        try:
+            songs = list(self.songs.keys())
+            return songs.index(song_id)
+        except IndexError:
+            return None
+
+    def add_song(self, song_obj: Song, add2queue=True) -> Song:
+        log.debug("Adding Song %r to playlist and will add to queue is %s", song_obj, add2queue)
+
+        self.songs[song_obj.id] = song_obj
+        if add2queue is True:
+            self.queue.append(song_obj.id)
+
+        return song_obj
+
+
+
+    def add_song_by_path(self, song_path: pathlib.Path, add2queue=True) -> typing.Union[None, Song]:
+        log.debug("Playlist.add_song_by_path called with %s", song_path)
         song = self.song_cls(song_path)
         try:
-            song.duration
+            song.touch()
         except BassException as bexc:
             if bexc.code == 41:
                 # bad formatted song
@@ -114,17 +144,25 @@ class Playlist:
 
         return None
 
-    def add_directory(self, dir_path: Path, recurse=True):
+    def add_directory(self, dir_path: Path, recurse: bool=True, top: bool = False):
+        """
+
+        :param dir_path: The directory to scan for music
+        :param recurse: Should sub directories be walked over
+        :param Top: Is this the top level method in the recursion
+        :return: A list of song_ids
+        """
         log.debug("Playlist.add_directory called with %s", dir_path)
 
         files = (file for file in dir_path.iterdir() if file.is_file() and file.suffix in self.VALID_TYPES)
         dirs = (fdir for fdir in dir_path.iterdir() if fdir.is_dir())
 
+        index_position = -1 if top is False else len(self)
         song_ids = []
 
         for song_path in files:
             try:
-                song = self.add_song(song_path)
+                song = self.add_song_by_path(song_path)
                 if song is not None:
                     song_ids.append(song.id)
             except TypeError:
@@ -133,10 +171,10 @@ class Playlist:
 
         if recurse is True:
             for fdir in dirs:
-                sub_song_ids = self.add_directory(fdir, recurse)
+                _, sub_song_ids = self.add_directory(fdir, recurse)
                 song_ids.extend(sub_song_ids)
 
-        return song_ids
+        return index_position, song_ids
 
     @property
     def fade_in(self):
@@ -151,27 +189,32 @@ class Playlist:
         self._fade_in = 0
 
     def set_randomize(self, restart_and_play=True):
-        if self.current is not None:
-            self.stop()
 
         ids = list(self.songs.keys())
         random.shuffle(ids)
         self.queue = ids
         self.mode = PlaylistMode.random
+        self.queue_position = 0
         if restart_and_play is True:
-            self.queue_position = 0
+            if self.current is not None:
+                self.stop()
             self.play_first()
 
 
     def set_sequential(self, restart_and_play = True):
-        if self.current is not None:
-            self.stop()
 
         self.queue = list(self.songs.keys())
         self.mode = PlaylistMode.sequential
+        self.queue_position = 0
         if restart_and_play is True:
-            self.queue_position = 0
+            if self.current is not None:
+                self.stop()
             self.play_first()
+        else:
+            if self.current is not None:
+                sid = self.current.id
+                self.queue_position = self.queue.index(sid)
+
 
 
     def loop_song(self):
@@ -270,6 +313,9 @@ class Playlist:
 
         elif self.current is not None and (self.current.is_paused or self.current.is_stopped):
             self.current.play()
+        elif self.current is not None and self.current.is_playing:
+            self.restart()
+
 
     def play_first(self) -> Song:
         del self.fadein_song
@@ -286,7 +332,7 @@ class Playlist:
 
         return self.current
 
-    def play_song_by_id(self, song_id):
+    def play_song_by_id(self, song_id) -> Song:
         song = self.songs.get(song_id, None)
         if song is None:
             #TODO raise an error here?
@@ -298,13 +344,17 @@ class Playlist:
         self.current = song
         self.play()
 
-    def play_song_by_index(self, song_index):
+        return song
+
+    def play_song_by_index(self, song_index) -> Song:
         song = self.get_song_by_row(song_index)
 
         del self.fadein_song
         del self.current
         self.current = song
         self.play()
+
+        return song
 
 
     def stop(self):
@@ -319,13 +369,14 @@ class Playlist:
         if self.fadein_song is not None:
             self.fadein_song.pause()
 
-        if self.current is not None:
+        if self.current is not None and (self.current.is_playing or self.current.is_paused):
             return self.current.pause()
 
         return None
 
 
     def restart(self):
+        log.debug("Restarting current song")
         if self.fadein_song is not None:
             del self.fadein_song
 
@@ -335,9 +386,11 @@ class Playlist:
 
 
     def next(self) -> Song:
+        log.debug("Advancing to next song")
         try:
             return self._next()
         except BassException:
+            # attempt to advance the song by one to get past an error
             if self.error_mode == PlaylistMode.progress_on_error:
                 self.queue_position += 1
                 if self.queue_position > len(self.queue) and self.mode == PlaylistMode.loop_all:
@@ -358,8 +411,7 @@ class Playlist:
 
         # stop the music
         if self.current is not None:
-            self.current.stop()
-            self.current.free_stream()
+            del self.current
 
 
         if self.fadein_song is not None:

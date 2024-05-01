@@ -1,38 +1,51 @@
 from pathlib import Path
 import typing as T
 from uuid import uuid4
+from hashlib import sha1
 import logging
+from collections import defaultdict
 
 from .datatypes import HANDLE
 from .bass_module import Bass
 from .bass_channel import BassChannel
 from .bass_stream import BassStream
+from .bass_tags import BassTags
 
 log = logging.getLogger(__name__)
+
+
 
 class Song:
 
     _handle: HANDLE
-    _handle_length: float # Seconds
-    _handle_position: float # Seconds
+    _length_seconds: float # Seconds
+    _length_bytes: float
+
+    _position_seconds: float # Seconds
     file_path: Path
+    tags: dict
+    _tags_fetched = False
 
-    def __init__(self, file_path: T.Union[str, Path]):
-        super(Song, self).__init__()
-        Bass.Init()
-
-        self._id = uuid4().hex
+    def __init__(self, file_path: T.Union[str, Path], length_seconds = None, length_bytes = None, tags = None):
+        Bass.Init() # TODO is it appropriate to kick off BASS library initialization here?
         self.file_path = Path(file_path)
+        # self._id = uuid4().hex
+        self._id = sha1(str(self.file_path.as_posix()).encode("utf-8")).hexdigest()
         if self.file_path.exists() is False:
             raise ValueError(f"{file_path} doesn't exist")
 
         if self.file_path.is_file() is False:
             raise ValueError(f"{file_path=} is not a valid file")
 
+        if tags is None:
+            tags = {}
+
 
         self._handle = None
-        self._handle_length = None # Length in seconds
-        self._handle_position = 0 # Current position in the song, in seconds
+        self._length_seconds = length_seconds # Length in seconds
+        self._length_bytes = length_bytes
+        self._position_seconds = 0 # Current position in the song, in seconds
+        self.tags = defaultdict(lambda : None, **tags)
 
     def __del__(self):
         """
@@ -40,33 +53,55 @@ class Song:
 
         :return:
         """
-        self.free_stream()
+        # self.free_stream()
+        pass
 
     @property
     def id(self):
         return self._id
 
     def _create_stream(self):
-        self._handle = BassStream.CreateFile(False, bytes(self.file_path))
-        self._handle_length = BassChannel.GetLengthSeconds(self._handle, BassChannel.GetLengthBytes(self.handle))
+        # TODO - linux/OSX support breaking
+        self._handle = BassStream.CreateFile(False, self.file_path.as_posix().encode("Windows-1252"))
+        if self._length_bytes is None:
+            self._length_bytes = BassChannel.GetLengthBytes(self._handle)
+            self._length_seconds = BassChannel.GetLengthSeconds(self._handle, self._length_bytes)
 
-    def free_stream(self) -> None:
+        if self._tags_fetched is False:
+            self.tags = BassTags.GetDefaultTags(self._handle)
+            self._tags_fetched = True
+
+    def free_stream(self, direct_stop=False) -> None:
         """
-            Stop this music file from playing and frees its file handle from the BASS library.
+        Stop this music file from playing and frees its file handle from the BASS library.
 
-            :raises
+        Args:
+            direct_stop:  Should I call the underlying BassChannel Stop method instead of indirectly
+
+        raises:
             BassException - If there is an issue releasing the file handle (eg it never existed).
+
+        Returns:
+
         """
         if self._handle is not None:
 
             if self.is_playing or self.is_paused:
-                self.stop()
+                if direct_stop is True and self._handle is not None:
+                    BassChannel.Stop(self._handle)
+                else:
+                    self.stop()
 
             retval = BassStream.Free(self._handle)
             if retval is not True:
                 Bass.RaiseError()
 
         self._handle = None
+
+    def touch(self, do_not_release=False):
+        self._create_stream()
+        self.free_stream()
+
 
     @property
     def position(self) -> float:
@@ -86,14 +121,20 @@ class Song:
 
     @property
     def duration(self) -> float:
-        if self._handle is None:
-            self._create_stream()
+        if self._length_seconds is None:
+            if self._handle is None:
+                self._create_stream()
+                self.free_stream()
 
-        return self._handle_length
+        return self._length_seconds
 
     @property
     def duration_bytes(self) -> int:
-        return BassChannel.GetLengthBytes(self.handle)
+        if self._length_bytes is None:
+            if self._handle is None:
+                self._create_stream()
+                self.free_stream()
+        return self._length_bytes
 
     @property
     def duration_time(self):
@@ -184,3 +225,9 @@ class Song:
 
     def __hash__(self):
         return hash(self.file_path)
+
+    def __repr__(self):
+        return f"<Song {self.file_path=!r}>"
+
+    def __str__(self):
+        return f"<Song {self.file_path=!r}>"

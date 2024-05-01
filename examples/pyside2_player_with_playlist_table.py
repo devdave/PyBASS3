@@ -6,7 +6,7 @@ import logging
 from PySide2 import QtCore
 from PySide2 import QtWidgets
 
-from pybass3.pys2_playlist import Pys2Playlist
+from pybass3.pys2_playlist import Pys2Playlist as Playlist
 
 Qt = QtCore.Qt
 log = logging.getLogger(__name__)
@@ -31,15 +31,7 @@ class PlayerWindow(QtWidgets.QMainWindow):
 
     def __init__(self, *args, **kwargs):
         super(PlayerWindow, self).__init__(*args, **kwargs)
-        # self.pl_position = None
-        # self.song_title = None
-        # self.song_position = None
-        # self.song_duration = None
-        # self.seek_bar = None
-        # self.prv_btn = self.ply_btn = self.pause_btn = self.stop_btn = self.next_btn = None
-        # self.add_file_btn = self.add_dir_btn = None
-        # self.randomize_btn = self.sequential_btn = None
-        # self.pl_table = None
+
         self.setupUI()
 
         log.debug("Initialized PlayerWindow")
@@ -115,7 +107,7 @@ class PlaylistTableModel(QtCore.QAbstractTableModel):
         super(PlaylistTableModel, self).__init__()
         self.playlist = playlist
 
-        self.playlist.song_added.connect(self.song_added)
+        self.playlist.signals.song_added.connect(self.song_added)
 
     def rowCount(self, parent: QtCore.QModelIndex = ...) -> int:
         return len(self.playlist)
@@ -154,8 +146,8 @@ class PlaylistTableModel(QtCore.QAbstractTableModel):
     def song_added(self, song_id: str):
 
         index = self.playlist.get_indexof_song_by_id(song_id)
-        index_model = QtCore.QModelIndex()
-        self.beginInsertRows(index_model, index, index)
+        log.debug("adding %s to %s", song_id, index)
+        self.beginInsertRows(QtCore.QModelIndex(), index, index)
         self.endInsertRows()
 
 
@@ -164,7 +156,7 @@ class PlayerController(QtCore.QObject):
     def __init__(self):
         super(PlayerController, self).__init__()
         self.view = PlayerWindow()
-        self.playlist = Pys2Playlist()
+        self.playlist = Playlist()
         self.plt_model = PlaylistTableModel(self.playlist)
 
         self.playlist.fade_in = 5
@@ -195,8 +187,8 @@ class PlayerController(QtCore.QObject):
         self.view.sequential_btn.clicked.connect(self.on_sequential_click)
 
         # Playlist connections
-        self.playlist.ticked.connect(self.on_pl_tick)
-        self.playlist.song_changed.connect(self.on_song_changed)
+        self.playlist.signals.ticked.connect(self.on_pl_tick)
+        self.playlist.signals.song_changed.connect(self.on_song_changed)
 
         # I could hide a lot of view logic as a PlayerWindow set model method
         # but I am tired of how complicated this has gotten
@@ -299,9 +291,10 @@ class PlayerController(QtCore.QObject):
             song_file = pathlib.Path(song_file[0])
 
             if song_file.exists() and song_file.is_file():
-                song_id, song = self.playlist.add_song(song_file)
-                self.do_state_update()
-                self.playlist.play_song(song_id)
+                song = self.playlist.add_song_by_path(song_file)
+                if song:
+                    self.do_state_update()
+                    self.playlist.play_song_by_id(song.id)
 
     def do_add_directory(self):
 
@@ -319,7 +312,7 @@ class PlayerController(QtCore.QObject):
         log.debug("User selected %s", dir_path)
 
         if dir_path.exists():
-            self.playlist.add_directory(dir_path, recurse=True)
+            self.playlist.add_directory(dir_path, recurse=True, suppress_emit=False)
             if len(self.playlist) > 0:
                 self.playlist.play()
 
@@ -335,13 +328,13 @@ class PlayerController(QtCore.QObject):
             self.playlist.play()
 
     def on_sequential_click(self):
-        self.playlist.stop()
+        # self.playlist.stop()
 
-        self.playlist.set_sequential()
+        self.playlist.set_sequential(restart_and_play=False)
 
-        if len(self.playlist) > 0:
-            self.playlist.queue_position = 0
-            self.playlist.play()
+        # if len(self.playlist) > 0:
+        #     self.playlist.queue_position = 0
+        #     self.playlist.play()
 
     def on_songs_table_row_clicked(self):
         index = self.view.pl_table.selectedIndexes()[0]  # type: QtCore.QModelIndex
